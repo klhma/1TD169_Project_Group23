@@ -1,0 +1,15 @@
+# Do NOT commit large data files.
+# Only small sample files (< 1 MB) should be committed here.
+*.csv
+*.json
+*.parquet
+*.avro
+*.orc
+*.gz
+*.zip
+*.tar
+*.tar.gz
+
+# Allow small sample files to be committed
+!sample_*.csv
+!sample_*.json
