@@ -27,7 +27,7 @@ def create_spark_session() -> SparkSession:
 
 def extract(spark: SparkSession, path: str):
     """Read raw data from *path* and return a DataFrame."""
-    return spark.read.option("header", "true").option("inferSchema", "true").csv(path)
+    return spark.read.json(path)
 
 
 def transform(df):
@@ -52,11 +52,12 @@ def transform(df):
 
 def load(df, path: str, fmt: str = config.OUTPUT_FORMAT) -> None:
     """Write the transformed DataFrame to *path* in the given format."""
-    writer = df.coalesce(config.NUM_PARTITIONS).write.mode("overwrite")
+    # Allowing Spark to automatically handle partitioning for large data writes.
+    writer = df.write.mode("overwrite")
     if fmt == "parquet":
         writer.parquet(path)
     else:
-        writer.option("header", "true").csv(path)
+        writer.json(path)
 
 
 def main():

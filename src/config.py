@@ -9,21 +9,17 @@ Edit this file to match your environment before running any jobs.
 # Data paths
 # ---------------------------------------------------------------------------
 
-# Root directory for raw input data (local path or HDFS/S3 URI)
-RAW_DATA_PATH = "data/raw/"
+RAW_DATA_PATH = "/data/reddit/corpus-webis-tldr-17.json"
 
-# Output directory for cleaned/transformed data
-CLEANED_DATA_PATH = "data/cleaned/"
+CLEANED_DATA_PATH = "/data/cleaned_reddit/"
 
-# Output directory for analysis results
-OUTPUT_PATH = "data/output/"
+OUTPUT_PATH = "/data/output/"
 
 # ---------------------------------------------------------------------------
 # Spark / cluster settings
 # ---------------------------------------------------------------------------
 
-# Spark master URL. Use "local[*]" for local mode, or e.g. "spark://master:7077"
-SPARK_MASTER = "local[*]"
+SPARK_MASTER = "spark://g23-master:7077"
 
 APP_NAME = "1TD169_Project_Group23"
 
