@@ -1,93 +1,77 @@
-"""
-analysis_job.py
----------------
-Main Spark / MapReduce analysis job.
-Reads cleaned data produced by etl_job.py, runs the analytical computations,
-and writes results to the output path defined in config.py.
-
-Usage:
-    spark-submit src/analysis_job.py
-"""
-
+import os
 from pyspark.sql import SparkSession
-from pyspark.sql import functions as F
-from pyspark.sql.types import StringType
+import pyspark.sql.functions as F
 
-import config
+def load_swear_words():
+    """Load swear words from the data directory."""
+    swear_words_path = os.path.join(os.path.dirname(__file__), "..", "data", "swear_words.txt")
+    with open(swear_words_path, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip()]
 
+def reddit_analysis(df, swear_words):
+    """
+    Find 10 subreddits with most and least amount of swear-word per post,
+    considering only subreddits with more than 1000 posts.
+    Results are saved to HDFS as CSV files.
 
-def create_spark_session() -> SparkSession:
-    """Create and return a SparkSession."""
-    return (
-        SparkSession.builder
-        .appName(f"{config.APP_NAME} - Analysis")
-        .master(config.SPARK_MASTER)
-        .getOrCreate()
+    This function:
+    - Adds a column 'swear_word_count' to each post, counting the number of swear words present.
+    - Aggregates by subreddit to compute:
+        * Average swear words per post
+        * Total post count
+    - Filters subreddits with more than 1000 posts.
+    - Sorts and limits results to top 10 for both most and least swearing subreddits.
+    - Writes results to CSV files in HDFS.
+
+    Note: All transformations and actions are Catalyst-optimized.
+    - The use of array functions for counting swear words allows Spark to efficiently process the data in a distributed manner,
+    leveraging Catalyst's optimizations for array operations.
+    - Grouping, filtering, and sorting operations are also optimized by Catalyst
+    """    
+    # Create a Spark array column from the list of swear words for efficient intersection
+    swear_words_array = F.array([F.lit(word) for word in swear_words])
+    
+    # Add a column counting the number of swear words in each post using array_intersect and size functions, which are optimized by Catalyst
+    df = df.withColumn(
+        "swear_word_count",
+        F.size(F.array_intersect(F.col("content_tokens"), swear_words_array))
     )
 
+    # Define aggregation expressions for average swear words per post and total post count
+    agg_exprs = [
+        F.avg("swear_word_count").alias("avg_swear_words_per_post"),
+        F.count("*").alias("post_count")
+    ]
 
-def load_data(spark: SparkSession, path: str, fmt: str = config.OUTPUT_FORMAT):
-    """Load cleaned data from *path* into a DataFrame."""
-    if fmt == "parquet":
-        return spark.read.parquet(path)
-    return spark.read.option("header", "true").option("inferSchema", "true").csv(path)
+    # Group by subreddit, aggregate, filter, sort, and limit results. Catalyst optimizes the entire query plan for these operations.
+    most_swearing = (
+        df.groupBy("subreddit")
+        .agg(*agg_exprs)
+        .filter(F.col("post_count") > 1000)
+        .orderBy(F.col("avg_swear_words_per_post").desc())
+        .limit(10)
+    )
+    # Write the most swearing subreddits to HDFS as CSV.
+    most_swearing.coalesce(1).write.mode("overwrite").csv("/data/results/most_swearing", header=True)
 
-
-def run_analysis(df):
-    """
-    Perform the core analytical computations.
-
-    Replace / extend the placeholder logic below with your actual analysis:
-    - Word count (MapReduce-style)
-    - Aggregations, joins, window functions, etc.
-    """
-    # ---------------------------------------------------------------------------
-    # Example: word count across all string columns
-    # ---------------------------------------------------------------------------
-    string_cols = [f.name for f in df.schema.fields if isinstance(f.dataType, StringType)]
-
-    if string_cols:
-        # Concatenate all string columns into one, split into words, count
-        word_col = F.concat_ws(" ", *[F.col(c) for c in string_cols])
-        words_df = (
-            df.select(F.explode(F.split(word_col, r"\s+")).alias("word"))
-            .filter(F.col("word") != "")
-            .groupBy("word")
-            .agg(F.count("*").alias("count"))
-            .orderBy(F.col("count").desc())
-        )
-        return words_df
-
-    # Fallback: return basic row count as a single-row DataFrame
-    return df.groupBy().agg(F.count("*").alias("total_rows"))
-
-
-def save_results(df, path: str, fmt: str = config.OUTPUT_FORMAT) -> None:
-    """Write analysis results to *path*."""
-    writer = df.coalesce(config.NUM_PARTITIONS).write.mode("overwrite")
-    if fmt == "parquet":
-        writer.parquet(path)
-    else:
-        writer.option("header", "true").csv(path)
-
+    least_swearing = (
+        df.groupBy("subreddit")
+        .agg(*agg_exprs)
+        .filter(F.col("post_count") > 1000)
+        .orderBy(F.col("avg_swear_words_per_post").asc())
+        .limit(10)
+    )
+    least_swearing.coalesce(1).write.mode("overwrite").csv("/data/results/least_swearing", header=True)
 
 def main():
-    spark = create_spark_session()
-    try:
-        print(f"[Analysis] Reading cleaned data from: {config.CLEANED_DATA_PATH}")
-        df = load_data(spark, config.CLEANED_DATA_PATH)
+    print("[ANALYSIS] Initializing SparkSession...")
+    spark = SparkSession.builder.appName("Reddit_Full_Analysis_Job").getOrCreate()
 
-        print("[Analysis] Running analysis ...")
-        result_df = run_analysis(df)
-        result_df.show(20, truncate=False)
+    print("[ANALYSIS] Reading cleaned Parquet data from HDFS...")
+    df = spark.read.parquet("/data/cleaned_reddit/")
 
-        print(f"[Analysis] Writing results to: {config.OUTPUT_PATH}")
-        save_results(result_df, config.OUTPUT_PATH)
-
-        print("[Analysis] Done.")
-    finally:
-        spark.stop()
-
+    swear_words = load_swear_words()
+    reddit_analysis(df, swear_words)
 
 if __name__ == "__main__":
     main()
