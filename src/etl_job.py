@@ -11,9 +11,23 @@ Usage:
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import StringType
-
+from pyspark.ml.feature import StopWordsRemover
 import config
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
 
+# Explicit schema definition for input JSON data to ensure consistent parsing and better performance
+schema = StructType([
+    StructField("author", StringType(), True),
+    StructField("body", StringType(), True),
+    StructField("normalizedBody", StringType(), True),
+    StructField("content", StringType(), True),
+    StructField("content_len", IntegerType(), True),
+    StructField("summary", StringType(), True),
+    StructField("summary_len", IntegerType(), True),
+    StructField("id", StringType(), True),
+    StructField("subreddit", StringType(), True),
+    StructField("subreddit_id", StringType(), True),
+])
 
 def create_spark_session() -> SparkSession:
     """Create and return a SparkSession."""
@@ -26,9 +40,8 @@ def create_spark_session() -> SparkSession:
 
 
 def extract(spark: SparkSession, path: str):
-    """Read raw data from *path* and return a DataFrame."""
-    return spark.read.json(path)
-
+    """Read raw JSON data from the given path using the explicit schema."""
+    return spark.read.json(path, schema=schema)
 
 def transform(df):
     """
@@ -37,7 +50,7 @@ def transform(df):
     Steps performed:
     - Drop rows where all values are null
     - Trim whitespace from all string columns
-    - Cast numeric columns to appropriate types (extend as needed)
+    - Tokenize content, remove stopwords, and clean tokens
     """
     # Drop completely empty rows
     df = df.dropna(how="all")
@@ -47,12 +60,24 @@ def transform(df):
     for col_name in string_cols:
         df = df.withColumn(col_name, F.trim(F.col(col_name)))
 
+    # Tokenize content column to create content_tokens
+    df = df.withColumn("content_tokens", F.split(F.lower(F.col("content")), r"\s+"))
+    
+    # Remove stopwords from content_tokens
+    remover = StopWordsRemover(inputCol="content_tokens", outputCol="filtered_tokens")
+    df = remover.transform(df)
+    
+    # Clean tokens: lowercase and remove non-alphanumeric characters
+    df = df.withColumn(
+        "content_tokens",
+        F.expr("transform(filtered_tokens, x -> lower(regexp_replace(x, '[^a-zA-Z0-9]', '')))")
+    )
+    df = df.drop("filtered_tokens")
     return df
 
 
 def load(df, path: str, fmt: str = config.OUTPUT_FORMAT) -> None:
-    """Write the transformed DataFrame to *path* in the given format."""
-    # Allowing Spark to automatically handle partitioning for large data writes.
+    """Write the transformed DataFrame to the given path in the specified format."""
     writer = df.write.mode("overwrite")
     if fmt == "parquet":
         writer.parquet(path)
