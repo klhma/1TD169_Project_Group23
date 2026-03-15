@@ -18,35 +18,19 @@ os.makedirs(output_dir, exist_ok=True)
 script_path = os.path.join(src_dir, "etl_job.py")
 master_url = config.SPARK_MASTER
 
-# 2. Define configurations for 1 to 6 total cores
+# 2. Define configurations dynamically
+# By omitting 'cores_per_exec', Spark Standalone will greedily pack cores into 
+# a single fat executor per worker node, perfectly handling the odd numbers.
 configurations = [
-    # 1 core total, constrained memory (800m) to simulate a smaller VM
-    {
-        "name": "1_core_800m", 
-        "cores_per_worker": "2", "total_cores": "1", "memory": "800m"
-    },
-    # 2 to 6 cores total, using full available memory per executor (2800m)
-    # The 2-core config acts as the ceiling for Vertical and the baseline for Horizontal
-    {
-        "name": "2_cores_2800m", 
-        "cores_per_worker": "2", "total_cores": "2", "memory": "2800m"
-    },
-    {
-        "name": "3_cores_2800m", 
-        "cores_per_worker": "2", "total_cores": "3", "memory": "2800m"
-    },
-    {
-        "name": "4_cores_2800m", 
-        "cores_per_worker": "2", "total_cores": "4", "memory": "2800m"
-    },
-    {
-        "name": "5_cores_2800m", 
-        "cores_per_worker": "2", "total_cores": "5", "memory": "2800m"
-    },
-    {
-        "name": "6_cores_2800m", 
-        "cores_per_worker": "2", "total_cores": "6", "memory": "2800m"
-    }
+    # VERTICAL BASELINE: 1 core total, constrained memory (800m)
+    {"name": "1_core_800m", "total_cores": "1", "memory": "800m"},
+    
+    # HORIZONTAL RUNS: 2 through 6 cores
+    {"name": "2_cores", "total_cores": "2", "memory": "2800m"},
+    {"name": "3_cores", "total_cores": "3", "memory": "2800m"},
+    {"name": "4_cores", "total_cores": "4", "memory": "2800m"},
+    {"name": "5_cores", "total_cores": "5", "memory": "2800m"},
+    {"name": "6_cores", "total_cores": "6", "memory": "2800m"}
 ]
 
 results = {}
@@ -59,13 +43,12 @@ print(f"Target Script: {script_path}\n")
 for conf in configurations:
     print("-" * 50)
     print(f"[Benchmarking] Running config: {conf['name']}")
-    print(f"Targeting Total Cores: {conf['total_cores']} | Max Cores/Worker: {conf['cores_per_worker']} | RAM/Worker: {conf['memory']}")
+    print(f"Targeting Total Cores: {conf['total_cores']} | RAM/Executor: {conf['memory']}")
     
-    # Construct the spark-submit command
+    # Construct the spark-submit command without --executor-cores
     cmd = [
         "spark-submit",
         "--master", master_url,
-        "--executor-cores", conf["cores_per_worker"],
         "--total-executor-cores", conf["total_cores"],
         "--executor-memory", conf["memory"],
         script_path
@@ -92,15 +75,14 @@ print("Benchmarking complete. Generating separate plots...")
 
 # --- 4. Plotting & Analysis Logic ---
 
-# We separate the configurations logically for plotting
-v_names = ["1_core_800m", "2_cores_2800m"]
-h_names = ["2_cores_2800m", "3_cores_2800m", "4_cores_2800m", "5_cores_2800m", "6_cores_2800m"]
+v_names = ["1_core_800m", "2_cores"]
+h_names = ["2_cores", "3_cores", "4_cores", "5_cores", "6_cores"]
 
 v_runs = [c for c in configurations if c["name"] in v_names and results.get(c["name"]) is not None]
 h_runs = [c for c in configurations if c["name"] in h_names and results.get(c["name"]) is not None]
 
 # ---------------------------------------------------------
-# A. Vertical Scaling Plots (1 Core / 800m vs 2 Cores / 2800m)
+# A. Vertical Scaling Plots
 # ---------------------------------------------------------
 if len(v_runs) == 2:
     v_cores = [int(c["total_cores"]) for c in v_runs]
@@ -113,14 +95,14 @@ if len(v_runs) == 2:
     # Plot 1: Vertical Runtime
     plt.figure(figsize=(8, 5))
     plt.plot(v_cores, v_times, marker='o', color='b', linewidth=2)
-    plt.title('Vertical Scaling: Runtime vs. Resources (Single Node)')
+    plt.title('Vertical Scaling: Runtime vs. Resources')
     plt.xlabel('Resources Allocated')
     plt.ylabel('Runtime (seconds)')
-    plt.xticks(v_cores, ['1 Core (800MB)', '2 Cores (2.8GB)'])
+    plt.xticks(v_cores, ['1 Core (800MB)', '2 Cores (2.8GB total)'])
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "plot_1_vertical_runtime.png"))
-    plt.close() # Close figure to prevent overlap
+    plt.close()
 
     # Plot 2: Vertical Speedup
     plt.figure(figsize=(8, 5))
@@ -129,7 +111,7 @@ if len(v_runs) == 2:
     plt.title('Vertical Scaling: Speedup Factor vs. Ideal')
     plt.xlabel('Resources Allocated')
     plt.ylabel('Speedup Factor')
-    plt.xticks(v_cores, ['1 Core (800MB)', '2 Cores (2.8GB)'])
+    plt.xticks(v_cores, ['1 Core (800MB)', '2 Cores (2.8GB total)'])
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.tight_layout()
@@ -139,13 +121,12 @@ if len(v_runs) == 2:
     print("Saved Vertical Scaling plots (1 and 2).")
 
 # ---------------------------------------------------------
-# B. Horizontal Scaling Plots (2 Cores up to 6 Cores)
+# B. Horizontal Scaling Plots
 # ---------------------------------------------------------
 if len(h_runs) > 1:
     h_cores = [int(c["total_cores"]) for c in h_runs]
     h_times = [results[c["name"]] for c in h_runs]
     
-    # Baseline for horizontal is the 2-core (1 fully utilized worker) run
     t_h_base = h_times[0] 
     h_actual_speedup = [t_h_base / t for t in h_times]
     h_ideal_speedup = [c / h_cores[0] for c in h_cores]
@@ -153,8 +134,8 @@ if len(h_runs) > 1:
     # Plot 3: Horizontal Runtime
     plt.figure(figsize=(8, 5))
     plt.plot(h_cores, h_times, marker='o', color='b', linewidth=2)
-    plt.title('Horizontal Scaling: Runtime vs. Total Cores (Across Nodes)')
-    plt.xlabel('Total Cores (2 Cores = 1 Worker)')
+    plt.title('Horizontal Scaling: Runtime vs. Total Cores')
+    plt.xlabel('Total Cores Across Cluster')
     plt.ylabel('Runtime (seconds)')
     plt.xticks(h_cores)
     plt.grid(True, linestyle='--', alpha=0.7)
@@ -167,7 +148,7 @@ if len(h_runs) > 1:
     plt.plot(h_cores, h_actual_speedup, marker='o', color='g', linewidth=2, label='Actual Speedup')
     plt.plot(h_cores, h_ideal_speedup, marker='x', linestyle='--', color='r', linewidth=2, label='Ideal Linear Speedup')
     plt.title('Horizontal Scaling: Speedup Factor vs. Ideal')
-    plt.xlabel('Total Cores (2 Cores = 1 Worker)')
+    plt.xlabel('Total Cores Across Cluster')
     plt.ylabel('Speedup Factor ($Time_{base} / Time_N$)')
     plt.xticks(h_cores)
     plt.legend()
